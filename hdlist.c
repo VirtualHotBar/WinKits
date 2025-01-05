@@ -1,6 +1,61 @@
 #include <windows.h>
 #include <stdio.h>
 
+BOOL GetDiskNumberByDriveLetter(char driveLetter, DWORD *diskNumber)
+{ // 需要管理员权限
+    BOOL result = FALSE;
+    HANDLE hDevice = INVALID_HANDLE_VALUE;
+    DWORD bytesReturned = 0;
+    STORAGE_DEVICE_NUMBER deviceNumber;
+
+    char devicePath[MAX_PATH];
+    sprintf(devicePath, "\\\\.\\%c:", driveLetter);
+
+    hDevice = CreateFileA(devicePath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (hDevice == INVALID_HANDLE_VALUE)
+    {
+        DWORD error = GetLastError();
+        return FALSE;
+    }
+
+    result = DeviceIoControl(hDevice, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &deviceNumber, sizeof(deviceNumber), &bytesReturned, NULL);
+    if (result)
+    {
+        *diskNumber = deviceNumber.DeviceNumber;
+    }
+    CloseHandle(hDevice);
+    return result;
+}
+
+char *GetLetterByHD(int hdIndex)
+{
+    static char driveLetters[256] = {0};
+    driveLetters[0] = '\0';
+    DWORD drives = GetLogicalDrives();
+    for (char letter = 'A'; letter <= 'Z'; letter++)
+    {
+        if (drives & (1 << (letter - 'A')))
+        {
+            char rootPath[4] = {letter, ':', '\\', '\0'};
+            if (GetDriveType(rootPath) == DRIVE_FIXED)
+            {
+
+                DWORD diskNumber;
+
+                if (GetDiskNumberByDriveLetter(letter, &diskNumber) && diskNumber == hdIndex)
+                {
+                    char volumePath[8];
+                    sprintf(volumePath, "%c:", letter);
+                    strcat(driveLetters, volumePath);
+                    strcat(driveLetters, " ");
+                }
+            }
+        }
+    }
+    return driveLetters;
+}
+
 int main() {
     HANDLE hDevice = INVALID_HANDLE_VALUE;
     DWORD bytesReturned = 0;
@@ -45,7 +100,9 @@ int main() {
                         case PARTITION_STYLE_GPT: partitionStyle = "GPT"; break;
                         default: partitionStyle = "RAW"; break;
                     }
-                    printf("%d|%s|%s|%llu|%s\n", i, (char*)(buffer + deviceDescriptor->ProductIdOffset), busType, diskSize, partitionStyle);
+
+
+                    printf("%d|%s|%s|%llu|%s|%s\n", i, (char*)(buffer + deviceDescriptor->ProductIdOffset), busType, diskSize, partitionStyle, GetLetterByHD(i));
                 } 
             }
         }
