@@ -35,7 +35,18 @@ int main() {
             DISK_GEOMETRY_EX diskGeometry;
             if (DeviceIoControl(hDevice, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0, &diskGeometry, sizeof(diskGeometry), &bytesReturned, NULL)) {
                 ULONGLONG diskSize = diskGeometry.DiskSize.QuadPart;
-                printf("%d|%s|%s|%llu\n", i, (char*)(buffer + deviceDescriptor->ProductIdOffset), busType, diskSize);
+
+                // 获取分区信息
+                PARTITION_INFORMATION_EX partitionInfo;
+                if (DeviceIoControl(hDevice, IOCTL_DISK_GET_PARTITION_INFO_EX, NULL, 0, &partitionInfo, sizeof(partitionInfo), &bytesReturned, NULL)) {
+                    const char* partitionStyle;
+                    switch (partitionInfo.PartitionStyle) {
+                        case PARTITION_STYLE_MBR: partitionStyle = "MBR"; break;
+                        case PARTITION_STYLE_GPT: partitionStyle = "GPT"; break;
+                        default: partitionStyle = "RAW"; break;
+                    }
+                    printf("%d|%s|%s|%llu|%s\n", i, (char*)(buffer + deviceDescriptor->ProductIdOffset), busType, diskSize, partitionStyle);
+                } 
             }
         }
         CloseHandle(hDevice);
