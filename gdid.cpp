@@ -3,88 +3,98 @@
 #include <iostream>
 #include <winioctl.h>
 #include <string>
+#include <sstream>
 
-// https://bbs.kanxue.com/thread-252767.htm
-
+#pragma pack(push, 1) // 确保结构体紧凑对齐
 typedef struct _HARDDISKINFO2
 {
-    ULONG of_name1;        // 名称1偏移
-    ULONG unknown1[3];     // 未知数据
-    ULONG of_name2;        // 名称2偏移
-    ULONG of_FirmwareRev;  // 固件版本偏移
-    ULONG of_SerialNumber; // 序列号偏移
-    ULONG unknown2;        // 未知数据
-    char outdata[520];     // 硬盘数据
-    PCHAR get_FirmwareRev()
-    {
-        if (of_FirmwareRev < sizeof(_HARDDISKINFO2))
-        {
-            return (PCHAR)this + of_FirmwareRev;
-        }
-        return const_cast<PCHAR>("");
-    }
-    PCHAR get_name1()
-    {
-        if (((PCHAR)this)[of_name1] == 0)
-            return (PCHAR)this + of_name1 + 8;
-        else
-            return (PCHAR)this + of_name1;
-        return NULL;
-    }
-    PCHAR get_name2()
-    {
-        if (of_name2 < sizeof(_HARDDISKINFO2))
-        {
-            return (PCHAR)this + of_name2;
-        }
-        return const_cast<PCHAR>("");
-    }
-    PCHAR get_SerialNumber()
-    {
-        if (of_SerialNumber < sizeof(_HARDDISKINFO2))
-        {
-            return (PCHAR)this + of_SerialNumber;
-        }
-        return const_cast<PCHAR>("");
-    }
-    PCHAR get_outdata()
-    {
-        return outdata;
-    }
+    ULONG of_name1;
+    ULONG unknown1[3];
+    ULONG of_name2;
+    ULONG of_FirmwareRev;
+    ULONG of_SerialNumber;
+    ULONG unknown2;
+    char outdata[520];
 
+    const char *get_field(ULONG offset, size_t max_len = 50) const
+    {
+        if (offset >= sizeof(_HARDDISKINFO2))
+            return "";
+        const char *field = reinterpret_cast<const char *>(this) + offset;
+        // 防止非终止字符串，手动截断
+        for (size_t i = 0; i < max_len; ++i)
+        {
+            if (field[i] == '\0')
+                return field;
+        }
+        static char buffer[51];
+        strncpy_s(buffer, field, 50);
+        buffer[50] = '\0';
+        return buffer;
+    }
 } HARDDISKINFO2, *PHARDDISKINFO2;
+#pragma pack(pop) // 恢复默认对齐
 
-std::string get_HardDiskUID(int harddiskindex)
+std::string GetHardDiskInfo(int disk_index)
 {
-    char objName[50] = {0};
-    wsprintfA(objName, "\\\\.\\PhysicalDrive%d", harddiskindex);
-    HANDLE hDevice = ::CreateFileA(objName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (hDevice == INVALID_HANDLE_VALUE)
-        return "error -1";
+    char device_path[50];
+    snprintf(device_path, sizeof(device_path), "\\\\.\\PhysicalDrive%d", disk_index);
 
-    unsigned char inputdata[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x03, 0x00, 0x00};
-
-    HARDDISKINFO2 hdinfo = {0};
-    DWORD dwBytesReturned = 0;
-    if (!DeviceIoControl(hDevice, 0x2D1400, inputdata, sizeof(inputdata), &hdinfo, sizeof(HARDDISKINFO2), &dwBytesReturned, nullptr))
+    HANDLE h_device = CreateFileA(device_path, GENERIC_READ | GENERIC_WRITE,
+                                  FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h_device == INVALID_HANDLE_VALUE)
     {
-        ::CloseHandle(hDevice);
-        return "error -2";
+        DWORD err = GetLastError();
+        std::cerr << "Failed to open device (Error " << err << ")" << std::endl;
+        return "Error: Cannot access device";
     }
-    ::CloseHandle(hDevice);
 
-    return std::string(hdinfo.get_FirmwareRev()) + "|" + hdinfo.get_name1() + "|" + std::string(hdinfo.get_name2()) + "|" + std::string(hdinfo.get_SerialNumber());
+    BYTE input_data[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x03, 0x00, 0x00};
+    HARDDISKINFO2 hd_info = {0};
+    DWORD bytes_returned = 0;
+
+    if (!DeviceIoControl(h_device, 0x2D1400, input_data, sizeof(input_data),
+                         &hd_info, sizeof(HARDDISKINFO2), &bytes_returned, nullptr))
+    {
+        DWORD err = GetLastError();
+        CloseHandle(h_device);
+        std::cerr << "DeviceIoControl failed (Error " << err << ")" << std::endl;
+        return "Error: Communication failed";
+    }
+    CloseHandle(h_device);
+
+    // 安全获取字段
+    std::stringstream ss;
+    ss << ">>"
+       << hd_info.get_field(hd_info.of_name2) << "|"
+       << hd_info.get_field(hd_info.of_FirmwareRev) << "|"
+       << hd_info.get_field(hd_info.of_SerialNumber) << "|"
+       << hd_info.get_field(hd_info.of_name1) << "|"
+       << hd_info.unknown1[0] << "|"
+       << hd_info.unknown1[1] << "|"
+       << hd_info.unknown1[2] << "|"
+       << hd_info.unknown1[3] << "|"
+       << hd_info.unknown2 << "<<";
+    return ss.str();
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2)
+    if (argc != 2)
     {
-        std::cout << "Usage: " << argv[0] << " <harddiskindex>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <DiskIndex>" << std::endl;
         return 1;
     }
-    int harddiskindex = std::stoi(argv[1]);
-    std::cout << get_HardDiskUID(harddiskindex) << std::endl;
 
+    try
+    {
+        int index = std::stoi(argv[1]);
+        std::cout << GetHardDiskInfo(index) << std::endl;
+    }
+    catch (...)
+    {
+        std::cerr << "Invalid disk index." << std::endl;
+        return 1;
+    }
     return 0;
 }
